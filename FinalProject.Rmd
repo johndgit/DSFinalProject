@@ -1,0 +1,250 @@
+---
+title: "DS Final Poject"
+author: "JD"
+date: "January 31, 2019"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ada)) install.packages("ada", repos = "http://cran.us.r-project.org")
+
+library(lubridate)
+
+library("rpart")
+library("ada")
+```
+
+# Introduction
+
+The goal of this exercise is to build a classification model to predict whether the relative humidity will be high or low at 3PM based on several predictors captured from weather readings at 9AM. For this exercise high humidly is defined as relative humidity greater than or equal to 24.99%
+
+The dataset was downloaded from Kaggle.   
+<https://www.kaggle.com/ktochylin/san-diego-every-minute-weather-indicators-201114/downloads/san-diego-every-minute-weather-indicators-201114.zip/1>  
+The dataset contains weather readings from 2011-09-10 to 2014-09-10 for San Diego, CA. Readings were taken at 1-minute intervals. There are 1.59M rows and 13 features.  
+
+The R Package Ada for Stochastic Boosting was used.
+The package was authored Mark Culp, Kjell Johnson, and George Michailidis and is maintained by Mark Culp <mvculp@mail.wvu.edu> 
+
+Package description: Performs discrete, real, and gentle boost under both exponential and
+logistic loss on a given data set. The package ada provides a straightforward,
+well-documented, and broad boosting routine for classification, ideally suited
+for small to moderate-sized data sets.
+
+# **Analysis** 
+
+Rows with missing features have been dropped.  
+
+Since we only need data for the 9AM observations and the relative humidity at 3PM, we take a subset of the data. 
+
+The 9AM data is extracted with all features and combined with the relative_humidity3pm which was also extracted. 
+
+The feature HighHumidity3pm is derived from relative_humidity3pm and added to the new dataset.
+
+
+```{r loadandclean, echo=FALSE,include=FALSE}
+dl <- tempfile()
+download.file("https://www.dropbox.com/s/l7s5jcddy2ve6wu/minute_weather.csv?dl=1", dl)
+WeatherReadings <- read_csv(dl)
+# If automatic download does not work, downloan manually from Kaggle or Dropbox with  links above and use code line below.
+
+# Read in file that was manually downloaed to local disk.
+#WeatherReadings <- read_csv("C:/WeatherData/minute_weather.csv")
+
+#Count number of rows
+WeatherReadings %>% summarize(count = n())
+#Remove rows with NULLS
+#WeatherReadings <- WeatherReadings[complete.cases(WeatherReadings),]
+WeatherReadings <- na.omit(WeatherReadings)
+#Count number of rows after removing rows with NULLS
+WeatherReadings %>% summarize(count = n())
+
+#Extract date, hour and minute from datatime field and add as new fields.
+WeatherReadings <- WeatherReadings %>% mutate(ReadingDate = date(hpwren_timestamp))
+WeatherReadings <- WeatherReadings %>% mutate(ReadingHour = hour(hpwren_timestamp))
+WeatherReadings <- WeatherReadings %>% mutate(ReadingMinute = minute(hpwren_timestamp))
+
+# Create new dataframe with only observations at 9AM.
+WeatherReadings9A <- WeatherReadings %>% filter(ReadingHour == 9,ReadingMinute == 0) %>%
+  select(ReadingDate,air_pressure9am=air_pressure, air_temp9am = air_temp, avg_wind_direction9am = avg_wind_direction, avg_wind_speed9am = avg_wind_speed,max_wind_direction9am = max_wind_direction, max_wind_speed9am = max_wind_speed,min_wind_direction9am = min_wind_direction, min_wind_speed9am = min_wind_speed, rain_accumulation9am = rain_accumulation,rain_duration9am = rain_duration, relative_humidity9am = relative_humidity)
+
+#head(WeatherReadings9A)
+# Create new dataframe with only date, time, and  relative humidity observations at 3PM.
+WeatherReadings3P <- WeatherReadings %>% filter(ReadingHour == 15,ReadingMinute == 0) %>%
+  select(ReadingDate, relative_humidity3pm = relative_humidity)
+#head(WeatherReadings3P)
+
+#only want data were we have both a 9AM ann 3PM readings. Combine using inner join.
+WeatherReadingsClean <- inner_join(WeatherReadings9A, WeatherReadings3P, by = "ReadingDate")
+
+# Add new file which will contain -1 for low humidity and 1 for high humidity at 3PM.
+# High humidy is defined as relative humidity greater than or equal to 24.99% 
+WeatherReadingsClean <- WeatherReadingsClean %>% mutate(HighHumidity3pm = case_when(relative_humidity3pm >= 24.99 ~1,TRUE ~ -1) )
+#Remove un-needed field ReadingDate.
+WeatherReadingsClean <- WeatherReadingsClean[,-1]
+#head(WeatherReadingsClean)
+```
+There are `r WeatherReadingsClean %>% summarize(count = n())` records in the cleaned dataset.
+
+```{r createDataSets, include=FALSE}
+set.seed(1)
+test_index <- createDataPartition(y = WeatherReadingsClean$HighHumidity3pm, times = 1, p = 0.1, list = FALSE)
+train_set <- WeatherReadingsClean[-test_index,]
+test_set <- WeatherReadingsClean[test_index,]
+
+WeatherReadingsClean %>% summarize(count = n())
+```
+Train and Test data sets were created.  The test set is 10% of the data.  
+
+There are `r train_set %>% summarize(count = n())` records in the training dataset.  
+
+There are `r test_set %>% summarize(count = n())` records in the test dataset.  
+
+```{r training, echo=FALSE}
+# Train models using default of 50 iterations.
+set.seed(1)
+adamodelD50 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                   avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                   min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                   + rain_duration9am + relative_humidity9am
+                ,data = train_set, iter=50, type = "discrete")
+set.seed(1)
+adamodelR50 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                  avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                  min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                  + rain_duration9am + relative_humidity9am
+                ,data = train_set, iter=50, type = "real")
+set.seed(1)
+adamodelG50 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                  avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                  min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                  + rain_duration9am + relative_humidity9am
+                ,data = train_set, iter=50, type = "gentle")
+#show results
+
+```
+Train 3 models using ADA package.  Each using a diffent algorithm to determin which will work best with our data.  
+
+##Results using the algorithm "discrete".
+```{r, echo=FALSE}
+summary(adamodelD50)
+```
+##Results using the algorithm "real".
+```{r, echo=FALSE}
+summary(adamodelR50)
+```
+##Results using the algorithm "gentle".
+```{r, echo=FALSE}
+summary(adamodelG50)
+#Gentle appears to be the most accurate for this data.
+```
+The "gentle" algorithm appears to be the most accurate for this data.  
+
+Let's build 3 additional models with the "gentle" algorithm using different iteration values.  
+This time we will also add the test data to the model so we can see our accuracy and kappa (*the measure of agreement between the predicted classification and actual classification*) for our test set when we use the trained models.  
+
+We will show the results and plot the Error and Kappa against the iterations.
+
+```{r trainingPart2, echo=FALSE}
+set.seed(1)
+adamodelG20 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                   avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                   min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                   + rain_duration9am + relative_humidity9am
+                 ,data = train_set, iter=20, type = "gentle")
+# Use model to do predictioins on Test data.
+predictionsG20 <- predict(adamodelG20,test_set )
+#add test dataset
+adamodelG20=addtest(adamodelG20,test_set,predictionsG20)
+
+set.seed(1)
+adamodelG100 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                     avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                     min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                     + rain_duration9am + relative_humidity9am
+                   ,data = train_set, iter=100, type = "gentle")
+# Use model to do predictioins on Test data.
+predictionsG100 <- predict(adamodelG100,test_set )
+#add test dataset
+adamodelG100=addtest(adamodelG100,test_set,predictionsG100)
+
+set.seed(1)
+adamodelG200 <- ada(HighHumidity3pm ~ air_pressure9am + air_temp9am + avg_wind_direction9am +
+                      avg_wind_speed9am + max_wind_direction9am + max_wind_speed9am + 
+                      min_wind_direction9am + min_wind_speed9am + rain_accumulation9am +
+                      + rain_duration9am + relative_humidity9am
+                    ,data = train_set, iter=200, type = "gentle")
+# Use model to do predictioins on Test data.
+predictionsG200 <- predict(adamodelG200,test_set )
+#add test dataset
+adamodelG200=addtest(adamodelG200,test_set,predictionsG200)
+
+
+# Use model to do predictioins on Test data.
+predictionsG50 <- predict(adamodelG50,test_set )
+#add test dataset
+adamodelG50=addtest(adamodelG50,test_set,predictionsG50)
+```
+##Results using 20 iterations.  
+```{r, echo=FALSE}
+summary(adamodelG20)
+plot(adamodelG20, kappa = TRUE, test=TRUE
+     ,cols= rainbow(dim(adamodelG20$model$errs)[2]+1)
+     ,tflag=TRUE,mfrow=c(2,1),mar=c(2, 2.5, 1.5, .5))
+```
+
+##Results using 50 iterations.  
+```{r, echo=FALSE}
+summary(adamodelG50)
+plot(adamodelG50, kappa = TRUE, test=TRUE
+     ,cols= rainbow(dim(adamodelG50$model$errs)[2]+1)
+     ,tflag=TRUE,mfrow=c(2,1),mar=c(2, 2.5, 1.5, .5))
+```
+
+##Results using 100 iterations.  
+```{r, echo=FALSE}
+summary(adamodelG100)
+
+plot(adamodelG100, kappa = TRUE, test=TRUE
+     ,cols= rainbow(dim(adamodelG100$model$errs)[2]+1)
+     ,tflag=TRUE,mfrow=c(2,1),mar=c(2, 2.5, 1.5, .5))
+```
+
+##Results using 200 iterations.  
+
+```{r, echo=FALSE}
+summary(adamodelG200)
+
+plot(adamodelG200, kappa = TRUE, test=TRUE
+     ,cols= rainbow(dim(adamodelG200$model$errs)[2]+1)
+     ,tflag=TRUE,mfrow=c(2,1),mar=c(2, 2.5, 1.5, .5))
+```
+
+# Conclusion
+
+We created models using 3 different algorithms from just one of many available packages.  Each algorithm yielded different results thus showing that not all algorithms will perform equally well on a given dataset. Experimentation with different algorithms is required to obtain the best results.  
+
+Most models can be tuned.  We only experimented with one tuning parameter here. The results show how changing tuning parameters can affect the outcome. In this case the more iterations we go though in training the model the higher the accuracy. However, as we set iterations higher the improvement in accuracy grows smaller. As we go beyond 100 iterations the incremental improvement greatly diminishes. The rate of improvement in the error drops of even earlier in less than 10 iterations.  
+
+One final observation we made is that not all features have the same predictive power.  The graph below show which features has more and less influence on the predictions.
+
+```{r, echo=FALSE}
+varplot(adamodelG100,plot.it = TRUE)
+
+```
+
+
+
+
+
+# References:  
+Introduction to Data Science. Author Rafael A. Irizarry  
+[https://rafalab.github.io/dsbook/](https://rafalab.github.io/dsbook/)  
+```{r, echo=FALSE}
+#Cleanup
+rm(dl, WeatherReadings, WeatherReadings9A,WeatherReadings3P, test_index)
+```
+
